@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from apis.real_debrid_api import RealDebrid
 from modules import source_utils
-from threading import Thread
+from threading import Thread, Lock
 from modules.utils import clean_file_name, normalize
 from modules.settings import enabled_debrids_check, filter_by_name
 # from modules.kodi_utils import logger
@@ -11,6 +11,9 @@ class source:
 		self.scrape_provider = 'rd_cloud'
 		self.sources = []
 		self.extensions = source_utils.supported_video_extensions()
+		# matched folder ids recorded during prefiltering (_scrape_cloud only)
+		self._matched_folder_ids = set()
+		self._matched_lock = Lock()
 
 	def results(self, info):
 		try:
@@ -31,15 +34,19 @@ class source:
 				for item in self.scrape_results:
 					try:
 						file_name = self._get_filename(item['path'])
+						# bypass per-file title check when the file came from a folder that
+						# was matched BY NAME in _scrape_cloud (empty-name folders are not matched)
+						folder_id = item.get('folder_id', '')
+						file_from_matched_folder = bool(folder_id) and folder_id in self._matched_folder_ids
 						if self.media_type == 'episode':
 							if not source_utils.cloud_episode_matches(self.season, self.episode, file_name, self.absolute_episode): continue
-							if filter_title and not source_utils.check_title(title, file_name, aliases, self.year, 'pack', self.episode): continue
-						elif filter_title and not source_utils.check_title(title, file_name, aliases, self.year, self.season, self.episode): continue
+							if filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, aliases, self.year, 'pack', self.episode)): continue
+						elif filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, aliases, self.year, self.season, self.episode)): continue
 						display_name = clean_file_name(file_name).replace('html', ' ').replace('+', ' ').replace('-', ' ')
 						file_dl, size = item['url_link'], round(float(item['bytes'])/1073741824, 2)
 						video_quality, details = source_utils.get_file_info(name_info=source_utils.release_info_format(file_name))
 						direct_debrid_link = item.get('direct_debrid_link', False)
-						folder_id, cache_type = item.get('folder_id', ''), item.get('cache_type', '')
+						cache_type = item.get('cache_type', '')
 						source_item = {'name': file_name, 'display_name': display_name, 'quality': video_quality, 'size': size, 'size_label': '%.2f GB' % size,
 									'extraInfo': details, 'url_dl': file_dl, 'id': file_dl, 'downloads': False, 'direct': True, 'source': self.scrape_provider, 'debrid': self.scrape_provider,
 									'scrape_provider': self.scrape_provider, 'direct_debrid_link': direct_debrid_link, 'folder_id': folder_id, 'cache_type': cache_type}
@@ -68,6 +75,12 @@ class source:
 				else:
 					if self.media_type == 'movie' and not any(x in normalized for x in year_query_list): continue
 					results_append(item['id'])
+					# folder matched by name — record as matched (thread-safe)
+					try:
+						with self._matched_lock:
+							self._matched_folder_ids.add(item['id'])
+					except:
+						pass
 			if not self.folder_results: return self.sources
 			threads = []
 			threads_append = threads.append
