@@ -51,7 +51,7 @@ class source:
 										file_from_matched_folder = True
 										break
 						except:
-						file_from_matched_folder = False
+							file_from_matched_folder = False
 
 						# If filter_title is enabled, require title in filename UNLESS the file
 						# came from a folder previously matched by folder-name prefiltering.
