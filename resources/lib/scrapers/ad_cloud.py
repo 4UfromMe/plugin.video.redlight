@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from threading import Thread
+from threading import Thread, Lock
 from apis.alldebrid_api import AllDebridAPI
 from modules import source_utils
 from modules.utils import clean_file_name, normalize
@@ -12,6 +12,9 @@ class source:
 		self.sources = []
 		self.AllDebrid = AllDebridAPI()
 		self.extensions = source_utils.supported_video_extensions()
+		# matched folder ids recorded during prefiltering (evidence-based only)
+		self._matched_folder_ids = set()
+		self._matched_lock = Lock()
 
 	def results(self, info):
 		try:
@@ -34,7 +37,10 @@ class source:
 				for item in self.scrape_results:
 					try:
 						file_name = normalize(item['n'])
-						if self.filter_title and not source_utils.check_title(title, file_name, self.aliases, self.year, self.season, self.episode): continue
+						# bypass per-file title check when the file came from a folder
+						# that was matched BY NAME in _scrape_cloud
+						file_from_matched_folder = bool(item.get('from_folder'))
+						if self.filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, self.aliases, self.year, self.season, self.episode)): continue
 						display_name = clean_file_name(file_name).replace('html', ' ').replace('+', ' ').replace('-', ' ')
 						direct_debrid_link = item.get('direct_debrid_link', False)
 						file_dl, size = item['l'], round(float(int(item['s']))/1073741824, 2)
@@ -117,29 +123,56 @@ class source:
 			append = threads.append
 			for item in my_cloud_files:
 				folder_name = item.get('filename') or ''
-				if not self._folder_matches(folder_name): continue
-				if self.media_type == 'movie' and self.filter_title:
-					normalized = normalize(folder_name)
-					if normalized and not any(x in normalized for x in self._year_query_list()): continue
+				cleaned = source_utils.clean_title(normalize(folder_name))
+				if cleaned:
+					# real folder name — must match title/alias queries (plus movie-year gate)
+					if not self._folder_matches(folder_name): continue
+					if self.media_type == 'movie' and self.filter_title:
+						normalized = normalize(folder_name)
+						if normalized and not any(x in normalized for x in self._year_query_list()): continue
+					folder_matched = True
+				else:
+					# anonymous folder — scrape it, but files keep the full title check
+					folder_matched = False
 				folder_id = item.get('id')
-				if folder_id: self.folder_results.append(folder_id)
+				if folder_id:
+					self.folder_results.append({'id': folder_id, 'matched': folder_matched})
+					if folder_matched:
+						# folder matched by name — record as matched (thread-safe)
+						try:
+							with self._matched_lock:
+								self._matched_folder_ids.add(folder_id)
+						except:
+							pass
 			if not self.folder_results: return self.sources
-			for folder_id in self.folder_results:
-				append(Thread(target=self._scrape_folders, args=(folder_id,)))
+			for entry in self.folder_results:
+				append(Thread(target=self._scrape_folders, args=(entry,)))
 			[i.start() for i in threads]
 			[i.join() for i in threads]
 		except: pass
 
-	def _scrape_folders(self, folder_id):
+
+	def _scrape_folders(self, folder_info):
 		try:
-			if isinstance(folder_id, dict):
-				folder_id = folder_id.get('id')
+			folder_matched = False
+			if isinstance(folder_info, dict):
+				folder_id = folder_info.get('id')
+				folder_matched = bool(folder_info.get('matched'))
+			else:
+				folder_id = folder_info
+				# legacy/plain id — fall back to the evidence set
+				folder_matched = folder_id in self._matched_folder_ids
 			if not folder_id: return
 			links = self.AllDebrid.cloud_file_links(folder_id)
 			links = [i for i in links if i.get('n', '').lower().endswith(tuple(self.extensions)) and i.get('l')]
 			for item in links:
+				# mark file as coming from a folder, with its actual evidence status
+				item['from_folder'] = folder_matched
+				item['folder_id'] = folder_id
 				if self.media_type == 'episode' and not source_utils.cloud_episode_matches(self.season, self.episode, item['n'], self.absolute_episode): continue
-				if self.filter_title and not source_utils.check_title(self.title, item['n'], self.aliases, self.year, self.season, self.episode): continue
+				# bypass file-level title/alias check only when the parent folder matched;
+				# episode-number matching remains enforced above
+				if self.filter_title and not (folder_matched or source_utils.check_title(self.title, item['n'], self.aliases, self.year, self.season, self.episode)): continue
 				self._append_scrape_result(item)
 		except: return
 
