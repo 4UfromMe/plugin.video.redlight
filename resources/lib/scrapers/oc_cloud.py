@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Thanks to kodifitzwell for allowing me to borrow his code
-from threading import Thread
+from threading import Thread, Lock
 from apis.offcloud_api import Offcloud
 from modules import source_utils
 from modules.utils import clean_file_name, normalize
@@ -12,6 +12,9 @@ class source:
 		self.scrape_provider = 'oc_cloud'
 		self.sources = []
 		self.extensions = source_utils.supported_video_extensions()
+		# matched Offcloud requestIds (folders) recorded during prefiltering
+		self._matched_folder_ids = set()
+		self._matched_lock = Lock()
 
 	def results(self, info):
 		try:
@@ -32,16 +35,18 @@ class source:
 				for item in self.scrape_results:
 					try:
 						file_name = item['filename']
+						# allow bypass when file was inside a matched folder
+						file_from_matched_folder = bool(item.get('from_folder')) or (item.get('folder_id') and item.get('folder_id') in self._matched_folder_ids)
 						if self.media_type == 'episode':
 							if not source_utils.cloud_episode_matches(self.season, self.episode, file_name, self.absolute_episode): continue
-							if filter_title and not source_utils.check_title(title, file_name, self.aliases, self.year, 'pack', self.episode): continue
-						elif filter_title and not source_utils.check_title(title, file_name, self.aliases, self.year, self.season, self.episode): continue
+							if filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, self.aliases, self.year, 'pack', self.episode)): continue
+						elif filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, self.aliases, self.year, self.season, self.episode)): continue
 						display_name = clean_file_name(file_name).replace('html', ' ').replace('+', ' ').replace('-', ' ')
 						file_dl, size = Offcloud.requote_uri(item['url']), 0
 						video_quality, details = source_utils.get_file_info(name_info=source_utils.release_info_format(file_name))
 						source_item = {'name': file_name, 'display_name': display_name, 'quality': video_quality, 'size': size, 'size_label': '%.2f GB' % size,
-									'extraInfo': details, 'url_dl': file_dl, 'id': file_dl, 'downloads': False, 'direct': True, 'source': self.scrape_provider,
-									'debrid': self.scrape_provider, 'scrape_provider': self.scrape_provider, 'direct_debrid_link': True}
+								'extraInfo': details, 'url_dl': file_dl, 'id': file_dl, 'downloads': False, 'direct': True, 'source': self.scrape_provider,
+								'debrid': self.scrape_provider, 'scrape_provider': self.scrape_provider, 'direct_debrid_link': True}
 						yield source_item
 					except Exception:
 						pass
@@ -132,6 +137,11 @@ class source:
 					if request_id and request_id not in seen_ids:
 						seen_ids.add(request_id)
 						results_append((request_id, folder_name, raw_folder))
+						try:
+							with self._matched_lock:
+								self._matched_folder_ids.add(request_id)
+							except:
+								pass
 				else:
 					file_name = item.get('fileName', '')
 					normalized = normalize(file_name)
@@ -156,8 +166,8 @@ class source:
 					if not isinstance(item, str) or not item.lower().endswith(tuple(self.extensions)): continue
 					normalized = normalize(item.split('/')[-1])
 					if not self._cloud_file_matches(normalized, folder_name, folder_prefiltered=True): continue
-					results_append({'filename': normalized, 'url': item})
+					results_append({'filename': normalized, 'url': item, 'from_folder': True, 'folder_id': folder_id})
 				except Exception:
-					continue
+				continue
 		except Exception:
 			return
