@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import threading
 from urllib.parse import urlparse
 from caches.main_cache import cache_object
 from modules import source_utils
@@ -15,6 +16,10 @@ class source:
 		self.folder_path = folder_path
 		self.sources, self.scrape_results = [], []
 		self.extensions = source_utils.supported_video_extensions()
+		# Track folders that were matched by folder-name prefiltering.
+		# Files inside these folders will bypass per-file title/alias filename checks.
+		self._matched_folders = set()
+		self._matched_folders_lock = threading.Lock()
 
 	def results(self, info):
 		try:
@@ -32,9 +37,26 @@ class source:
 				for item in self.scrape_results:
 					try:
 						file_name = normalize(item[0])
-						if filter_title and not source_utils.check_title(title, file_name, aliases, self.year, self.season, self.episode): continue
-						display_name = clean_file_name(file_name).replace('html', ' ').replace('+', ' ').replace('-', ' ')
+						# file_dl is the full path returned earlier by _scrape_directory
 						file_dl = item[1]
+						# determine whether file is inside a previously matched folder
+						try:
+							path_norm = os.path.normpath(file_dl)
+							file_from_matched_folder = False
+							with self._matched_folders_lock:
+								for mf in self._matched_folders:
+									if not mf: continue
+									mf_norm = os.path.normpath(mf)
+									if path_norm == mf_norm or path_norm.startswith(mf_norm + os.sep):
+										file_from_matched_folder = True
+										break
+						except:
+						file_from_matched_folder = False
+
+						# If filter_title is enabled, require title in filename UNLESS the file
+						# came from a folder previously matched by folder-name prefiltering.
+						if filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, aliases, self.year, self.season, self.episode)): continue
+						display_name = clean_file_name(file_name).replace('html', ' ').replace('+', ' ').replace('-', ' ')
 						try: size = item[2]
 						except: size = self._get_size(file_dl)
 						video_quality, details = source_utils.get_file_info(name_info=source_utils.release_info_format(file_name))
@@ -71,7 +93,14 @@ class source:
 					size = self._get_size(url_path)
 					scrape_results_append((item[0], url_path, size))
 			elif self.title_query in item_name or any(x in item_name for x in self.folder_query):
-					folder_results_append((os.path.join(folder_name, item[0])))
+				# Matched folder — record it (thread-safe) so files inside can bypass checks.
+				fpath = os.path.join(folder_name, item[0])
+				folder_results_append((fpath))
+				try:
+					with self._matched_folders_lock:
+						self._matched_folders.add(os.path.normpath(fpath))
+				except:
+					pass
 		folder_results = []
 		scrape_results_append = self.scrape_results.append
 		folder_results_append = folder_results.append
