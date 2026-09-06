@@ -59,7 +59,7 @@ class source:
 						size = round(float(item.get('size') or 0)/1073741824, 2)
 						video_quality, details = source_utils.get_file_info(name_info=source_utils.release_info_format(file_name))
 						source_item = {'name': file_name, 'display_name': display_name, 'quality': video_quality, 'size': size, 'size_label': '%.2f GB' % size,
-									'debrid': self.scrape_provider, 'extraInfo': details, 'url_dl': file_dl, 'id': file_dl, 'downloads': False, 'direct': True,
+									'debrid': self.scrape_provider, 'extraInfo': details, 'url_dl': file_dl, 'id': item['id'], 'downloads': False, 'direct': True,
 									'source': self.scrape_provider, 'scrape_provider': self.scrape_provider}
 						yield source_item
 					except: pass
@@ -127,12 +127,14 @@ class source:
 		if depth < 2: return True
 		return self._folder_match(name, path)
 
-	def _file_passes(self, label, filename=None):
-		if self.filter_title and not self._matches_title(label): return False
+	def _file_passes(self, label, filename=None, from_folder=False):
+		# titled files inside a matched folder skip the filename filename-title check;
+		# episode numbering and movie-year checks remain enforced
+		if not from_folder and self.filter_title and not self._matches_title(label): return False
 		if self.media_type == 'movie':
 			if self.year and not any(x in label for x in self._year_query_list()): return False
 		else:
-			return source_utils.seas_ep_filter_exact(self.season, self.episode, label)
+			return source_utils.seas_ep_filter_exact(self.season, self.episode, normalize(filename or label))
 		return True
 
 	def _scrape_cloud(self):
@@ -174,7 +176,7 @@ class source:
 			if not self._is_video_file(item): continue
 			file_item = {'id': item.get('id'), 'name': name, 'size': item.get('size') or 0, 'path': child_path, 'from_folder': parent_matched}
 			label = self._item_label(file_item)
-			if not self._file_passes(label, name): continue
+			if not self._file_passes(label, name, from_folder=parent_matched): continue
 			append_result(file_item)
 
 	def _scrape_cloud_listall(self):
