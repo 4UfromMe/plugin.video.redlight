@@ -140,8 +140,8 @@ class source:
 						try:
 							with self._matched_lock:
 								self._matched_folder_ids.add(request_id)
-							except:
-								pass
+						except:
+							pass
 				else:
 					file_name = item.get('fileName', '')
 					normalized = normalize(file_name)
@@ -168,6 +168,6 @@ class source:
 					if not self._cloud_file_matches(normalized, folder_name, folder_prefiltered=True): continue
 					results_append({'filename': normalized, 'url': item, 'from_folder': True, 'folder_id': folder_id})
 				except Exception:
-				continue
+					continue
 		except Exception:
 			return
