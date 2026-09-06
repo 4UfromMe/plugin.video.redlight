@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import time
+import os
+from threading import Lock
 from apis.premiumize_api import Premiumize
 from modules import source_utils
 from modules.utils import clean_file_name, normalize
@@ -16,6 +18,9 @@ class source:
 		self._folders_scanned = 0
 		self._max_folder_scans = 24
 		self._listall_reserve_seconds = 8
+		# matched folder paths (normalized) — files inside these bypass per-file title checks
+		self._matched_folder_paths = set()
+		self._matched_lock = Lock()
 
 	def results(self, info):
 		try:
@@ -35,11 +40,20 @@ class source:
 				for item in self.scrape_results:
 					try:
 						file_name = self._item_label(item)
+						# bypass per-file title check when the file sits inside a matched folder
+						file_from_matched_folder = bool(item.get('from_folder'))
+						if not file_from_matched_folder:
+							path_norm = os.path.normpath(item.get('path') or '')
+							if path_norm:
+								for mf in self._matched_folder_paths:
+									if path_norm == mf or path_norm.startswith(mf + os.sep):
+										file_from_matched_folder = True
+										break
 						if self.media_type == 'episode':
 							file_only = normalize(item.get('name') or '')
 							if not source_utils.cloud_episode_matches(self.season, self.episode, file_only, self.absolute_episode): continue
-							if self.filter_title and not source_utils.check_title(title, file_name, self.aliases, self.year, 'pack', self.episode): continue
-						elif self.filter_title and not source_utils.check_title(title, file_name, self.aliases, self.year, self.season, self.episode): continue
+							if self.filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, self.aliases, self.year, 'pack', self.episode)): continue
+						elif self.filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, self.aliases, self.year, self.season, self.episode)): continue
 						display_name = clean_file_name(normalize(item.get('name') or file_name)).replace('html', ' ').replace('+', ' ').replace('-', ' ')
 						file_dl = item['id']
 						size = round(float(item.get('size') or 0)/1073741824, 2)
@@ -102,20 +116,23 @@ class source:
 			return bool(self.year and str(self.year) in label)
 		return source_utils.seas_ep_filter_exact(self.season, self.episode, label)
 
+	def _folder_match(self, name, path):
+		"""True when the folder itself matches by title or season/year hint."""
+		label = normalize('%s %s' % (path, name))
+		return self._matches_title(label) or self._has_media_hint(label)
+
 	def _should_enter_folder(self, name, path, depth):
 		if time.time() > self.scrape_deadline: return False
-		label = normalize('%s %s' % (path, name))
 		# Root and one level down (e.g. "My Files") — always open so titled folders are reachable.
 		if depth < 2: return True
-		if self._matches_title(label) or self._has_media_hint(label): return True
-		if not self.filter_title and self._has_media_hint(label): return True
-		return False
+		return self._folder_match(name, path)
 
 	def _file_passes(self, label, filename=None):
 		if self.filter_title and not self._matches_title(label): return False
 		if self.media_type == 'movie':
 			if self.year and not any(x in label for x in self._year_query_list()): return False
-		elif not source_utils.cloud_episode_matches(self.season, self.episode, normalize(filename or label), self.absolute_episode): return False
+		else:
+			return source_utils.seas_ep_filter_exact(self.season, self.episode, label)
 		return True
 
 	def _scrape_cloud(self):
@@ -134,6 +151,8 @@ class source:
 			content = self._list_folder(folder_id)
 		except: return
 		append_result = self.scrape_results.append
+		# files in this folder inherit "matched" status from the folder we're currently in
+		parent_matched = bool(path_prefix) and os.path.normpath(path_prefix) in self._matched_folder_paths
 		for item in content:
 			if time.time() > self.scrape_deadline: return
 			if not isinstance(item, dict): continue
@@ -142,10 +161,18 @@ class source:
 			child_path = '%s/%s' % (path_prefix, name) if path_prefix else name
 			if item.get('type') == 'folder':
 				if self._should_enter_folder(name, child_path, depth):
+					# record the folder as matched only when it actually matched by
+					# title/season-year hint — NOT merely because it was auto-entered
+					# at shallow depth (avoid bypassing checks for generic folders).
+					if self._folder_match(name, child_path):
+						try:
+							with self._matched_lock:
+								self._matched_folder_paths.add(os.path.normpath(child_path))
+						except: pass
 					self._folder_queue.append((item.get('id'), child_path, depth + 1))
 				continue
 			if not self._is_video_file(item): continue
-			file_item = {'id': item.get('id'), 'name': name, 'size': item.get('size') or 0, 'path': child_path}
+			file_item = {'id': item.get('id'), 'name': name, 'size': item.get('size') or 0, 'path': child_path, 'from_folder': parent_matched}
 			label = self._item_label(file_item)
 			if not self._file_passes(label, name): continue
 			append_result(file_item)
