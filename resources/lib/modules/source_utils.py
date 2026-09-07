@@ -252,18 +252,18 @@ def seas_ep_filter_exact(season, episode, release_title):
 # (?!\d) avoids treating long hash tags like S1E123456… as episode numbers.
 _CLOUD_SE_TOKEN_RE = re.compile(
 	r'(?:'
-	r's(\d{1,2})[.-]?e[p]?[.-]?(\d{1,3})(?!\d)'
+	r's(\d{1,2})[.-]?e[p]?[.-]?(\d{1,4})(?!\d)'
 	r'|'
-	r's(\d{1,2})x(?:e)?(\d{1,3})(?!\d)'
+	r's(\d{1,2})x(?:e)?(\d{1,4})(?!\d)'
 	r'|'
-	r's(\d{1,2})[.-]+(?:e[p]?[.-]*)?(\d{1,3})(?!\d)'
+	r's(\d{1,2})[.-]+(?:e[p]?[.-]*)?(\d{1,4})(?!\d)'
 	r'|'
-	r'(\d{1,2})x(\d{1,3})(?!\d)'
+	r'(\d{1,2})x(\d{1,4})(?!\d)'
 	r')'
 )
 # Anime-style bare episode only when no Sxx/NxN token exists: "Show - 001 - Title", "Show - 255.mkv".
-_CLOUD_BARE_EP_RE = re.compile(r'(?:^|[.-])(\d{1,3})(?=[.-]|$)')
-_BARE_EP_BLOCKLIST = frozenset((480, 720, 1080, 2160))
+_CLOUD_BARE_EP_RE = re.compile(r'(?:^|[.-])(\d{1,4})(?=[.-]|$)')
+#_BARE_EP_BLOCKLIST = frozenset((480, 720, 1080, 2160))
 
 def _normalize_release_title(release_title):
 	return re.sub(r'[^A-Za-z0-9-]+', '.', unquote(release_title).replace('\'', '')).lower()
@@ -314,7 +314,7 @@ def iter_bare_episode_numbers(release_title):
 			num = int(match.group(1))
 		except Exception:
 			continue
-		if num < 1 or num in _BARE_EP_BLOCKLIST:
+		if num < 1:#or num in _BARE_EP_BLOCKLIST:
 			continue
 		yield num
 
