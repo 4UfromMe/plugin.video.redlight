@@ -21,6 +21,11 @@ class source:
 		self._matched_folders = set()
 		self._matched_folders_lock = threading.Lock()
 
+	def _match_name(self, filename, folder_name=''):
+		# combined folder+file text so folder-supplied tokens (e.g. "Season 01/E05.mkv") can match
+		if not folder_name: return filename
+		return '%s %s' % (folder_name, filename)
+
 	def results(self, info):
 		try:
 			if not self.folder_path: return source_utils.internal_results(self.scraper_name, self.sources)
@@ -92,7 +97,8 @@ class source:
 			if file_type == 'file':
 				ext = os.path.splitext(urlparse(item[0]).path)[-1].lower()
 				if ext in self.extensions:
-					if self.media_type == 'episode' and not source_utils.seas_ep_filter(self.season, self.episode, normalized): return
+					# episode match on combined parent-folder+file text
+					if self.media_type == 'episode' and not source_utils.seas_ep_filter(self.season, self.episode, self._match_name(normalized, folder_name)): return
 					url_path = self.url_path(folder_name, item[0])
 					size = self._get_size(url_path)
 					scrape_results_append((item[0], url_path, size))
