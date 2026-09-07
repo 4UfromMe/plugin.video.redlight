@@ -263,7 +263,9 @@ _CLOUD_SE_TOKEN_RE = re.compile(
 )
 # Anime-style bare episode only when no Sxx/NxN token exists: "Show - 001 - Title", "Show - 255.mkv".
 _CLOUD_BARE_EP_RE = re.compile(r'(?:^|[.-])(\d{1,4})(?=[.-]|$)')
-#_BARE_EP_BLOCKLIST = frozenset((480, 720, 1080, 2160))
+#_BARE_EP_BLOCKLIST = frozenset((480, 720, 1080, 2160)) # delete
+
+_RESOLUTION_TOKEN_RE = re.compile(r'(?:^|[.-])\d{3,4}[pi](?=[.-]|$)')
 
 def _normalize_release_title(release_title):
 	return re.sub(r'[^A-Za-z0-9-]+', '.', unquote(release_title).replace('\'', '')).lower()
@@ -355,6 +357,70 @@ def cloud_episode_matches(season, episode, filename, absolute_episode=None):
 	if not targets:
 		return False
 	return any(num in targets for num in iter_bare_episode_numbers(filename))
+
+def cloud_folder_file_matches(season, episode, folder_name, filename, absolute_episode=None, ep_name=None, year=None):
+	"""Episode match for a file inside a folder already title-matched to the show.
+
+	Acceptance order:
+	1. OVERRIDE: episode-name words all present in the filename -> True unconditionally.
+	2. Explicit SxxExx / NxN tokens in the FILENAME are authoritative (disagreement -> False).
+	3. Folder season (when present) must equal the requested season.
+	4. Number evidence from the filename, after resolution tokens (1080p etc.) are stripped:
+	   - bare number matching episode / absolute / S01-alias -> evidence
+	   - 4-digit > 1800 must match absolute / episode / show year (+/-1); unknown -> block
+	   - a year-only match needs additional marker evidence, otherwise block
+	"""
+	if not filename:
+		return False
+	try:
+		season_i, episode_i = int(season), int(episode)
+	except Exception:
+		return False
+	# OVERRIDE: ep name in the filename wins over every mismatch/block below
+	if ep_name and episode_title_in_release(ep_name, filename):
+		return True
+	# explicit tokens in the file decide; wrong S/E is final
+	tokens = list(iter_season_episode_tokens(filename))
+	if tokens:
+		return any(s_num == season_i and e_num == episode_i for s_num, e_num in tokens)
+	# folder season (when present) must agree
+	folder_season = find_season_in_release_title(folder_name or '')
+	if folder_season is not None and int(folder_season) != season_i:
+		return False
+	name = _RESOLUTION_TOKEN_RE.sub('', _normalize_release_title(filename))
+	targets = {episode_i}
+	if absolute_episode is not None:
+		try:
+			abs_i = int(absolute_episode)
+			if abs_i > 0: targets.add(abs_i)
+		except Exception:
+			pass
+	if season_i == 1:
+		targets.add(episode_i)
+	try:
+		y = int(year)
+		year_set = {y - 1, y, y + 1}
+	except Exception:
+		year_set = set()
+	number_evidence = year_only = False
+	for match in _CLOUD_BARE_EP_RE.finditer(name):
+		try:
+			num = int(match.group(1))
+		except Exception:
+			continue
+		if num > 1800:
+			if num in targets: number_evidence = True
+			elif year_set and num in year_set: year_only = True
+			else: return False
+		elif num in targets:
+			number_evidence = True
+	marker_evidence = False
+	marker = re.search(r'(?:^|[.-])(?:episode|ep|e)[.-]?0*(\d{1,4})(?![0-9])', name)
+	if marker:
+		try: marker_evidence = int(marker.group(1)) == episode_i
+		except Exception: pass
+	if year_only and not (number_evidence or marker_evidence): return False
+	return number_evidence or marker_evidence
 
 def find_season_in_release_title(release_title):
 	release_title = re.sub(r'[^A-Za-z0-9-]+', '.', unquote(release_title).replace('\'', '')).lower()
