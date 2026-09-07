@@ -5,6 +5,7 @@ import base64
 import time
 import requests
 from threading import Thread
+from string import printable
 from urllib.parse import unquote, unquote_plus
 from caches.settings_cache import get_setting
 from modules.metadata import episodes_meta
@@ -263,7 +264,6 @@ _CLOUD_SE_TOKEN_RE = re.compile(
 )
 # Anime-style bare episode only when no Sxx/NxN token exists: "Show - 001 - Title", "Show - 255.mkv".
 _CLOUD_BARE_EP_RE = re.compile(r'(?:^|[.-])(\d{1,4})(?=[.-]|$)')
-#_BARE_EP_BLOCKLIST = frozenset((480, 720, 1080, 2160)) # delete
 
 _RESOLUTION_TOKEN_RE = re.compile(r'(?:^|[.-])\d{3,4}[pi](?=[.-]|$)')
 
@@ -316,7 +316,7 @@ def iter_bare_episode_numbers(release_title):
 			num = int(match.group(1))
 		except Exception:
 			continue
-		if num < 1:#or num in _BARE_EP_BLOCKLIST:
+		if num < 1:
 			continue
 		yield num
 
