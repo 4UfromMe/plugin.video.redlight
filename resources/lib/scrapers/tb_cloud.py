@@ -19,6 +19,8 @@ class source:
 		# matched folder ids recorded during prefiltering
 		self._matched_folder_ids = set()
 		self._matched_lock = Lock()
+		# folder id -> raw folder name (folder-context episode matching)
+		self._folder_names = {}
 
 	def results(self, info):
 		self.sources = []
@@ -26,6 +28,7 @@ class source:
 			if not enabled_debrids_check('tb'):
 				return self.sources
 			self.scrape_results = []
+			self._folder_names = {}
 			filter_title = filter_by_name(self.scrape_provider)
 			self.media_type, title = info.get('media_type'), info.get('title')
 			self.year = int(info.get('year') or 0)
@@ -33,8 +36,9 @@ class source:
 			self.absolute_episode = info.get('absolute_episode')
 			self.tmdb_id = info.get('tmdb_id')
 			self.title = title
-			self.folder_query = source_utils.clean_title(normalize(title))
 			self.aliases = source_utils.get_aliases_titles(info.get('aliases', []))
+			self.ep_name = info.get('ep_name') or info.get('episode_name') or ''
+			self.folder_query = source_utils.clean_title(normalize(title))
 			self.title_queries = self._title_queries()
 			self.scrape_deadline = time.time() + min(25, max(10, int(get_setting('redlight.results.timeout', '20'))))
 			for media_type in ('torrent', 'usenet', 'webdl'):
@@ -57,7 +61,8 @@ class source:
 						folder_id = item.get('folder_id')
 						file_from_matched_folder = folder_id is not None and folder_id in self._matched_folder_ids
 						if self.media_type == 'episode':
-							if not source_utils.cloud_episode_matches(self.season, self.episode, file_name_latin, self.absolute_episode):
+							# folder-aware episode match: folder name + ep_name override + number evidence
+							if not source_utils.cloud_folder_file_matches(self.season, self.episode, self._folder_names.get(folder_id, ''), file_name_latin, self.absolute_episode, ep_name=self.ep_name, year=self.year):
 								continue
 							if filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name_latin, self.aliases, self.year, 'pack', self.episode)):
 								continue
@@ -159,7 +164,8 @@ class source:
 
 	def _match_cloud_file(self, normalized, folder_name='', raw_file='', raw_folder='', folder_prefiltered=False):
 		if self.media_type == 'episode':
-			return source_utils.cloud_episode_matches(self.season, self.episode, normalized, self.absolute_episode)
+			# folder-aware episode match: folder name + bare filename + ep_name override
+			return source_utils.cloud_folder_file_matches(self.season, self.episode, raw_folder or folder_name, normalized, self.absolute_episode, ep_name=self.ep_name, year=self.year)
 		if folder_prefiltered:
 			return True
 		clean_file = source_utils.clean_title(normalized)
@@ -203,6 +209,7 @@ class source:
 					continue
 				# folder passed prefiltering — record as matched (thread-safe)
 				if folder_id:
+					if raw_folder: self._folder_names[folder_id] = raw_folder
 					try:
 						with self._matched_lock:
 							self._matched_folder_ids.add(folder_id)
