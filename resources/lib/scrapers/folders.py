@@ -32,6 +32,8 @@ class source:
 			filter_title = filter_by_name('folders')
 			self.media_type, title, self.year = info.get('media_type'), info.get('title'), int(info.get('year'))
 			self.season, self.episode = info.get('season'), info.get('episode')
+			self.absolute_episode = info.get('absolute_episode')
+			self.ep_name = info.get('ep_name') or info.get('episode_name') or ''
 			self.tmdb_id = info.get('tmdb_id')
 			self.title = title
 			self.title_query = source_utils.clean_title(normalize(title))
@@ -98,8 +100,8 @@ class source:
 				ext = os.path.splitext(urlparse(item[0]).path)[-1].lower()
 				if ext in self.extensions:
 					# episode match on combined parent-folder+file text
-					if self.media_type == 'episode' and not source_utils.seas_ep_filter(self.season, self.episode, self._match_name(normalized, folder_name)): return
-					url_path = self.url_path(folder_name, item[0])
+					if self.media_type == 'episode' and not source_utils.cloud_folder_file_matches(self.season, self.episode, folder_name, normalized, self.absolute_episode if hasattr(self, 'absolute_episode') else None, ep_name=getattr(self, 'ep_name', None), year=self.year): return
+						url_path = self.url_path(folder_name, item[0])
 					size = self._get_size(url_path)
 					scrape_results_append((item[0], url_path, size))
 			elif self._folder_matches(item_name):
