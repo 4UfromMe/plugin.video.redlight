@@ -92,13 +92,12 @@ class source:
 			if self.year and not self._contains_year(raw_folder):
 				return False
 			return True
+		# episodes: require actual title/alias evidence — no season-pattern-only match
 		if self.folder_query and self.folder_query in folder_name:
 			return True
 		if any(q and q in folder_name for q in self.title_queries):
 			return True
-		if source_utils.seas_ep_filter_exact(self.season, self.episode, raw_folder):
-			return True
-		return self._title_match('', folder_name)
+		return False
 
 	def _cloud_file_matches(self, normalized, folder_name='', folder_prefiltered=False):
 		if self.media_type == 'movie':
