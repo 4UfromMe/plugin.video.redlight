@@ -101,7 +101,7 @@ class source:
 				if ext in self.extensions:
 					# episode match on combined parent-folder+file text
 					if self.media_type == 'episode' and not source_utils.cloud_folder_file_matches(self.season, self.episode, folder_name, normalized, self.absolute_episode if hasattr(self, 'absolute_episode') else None, ep_name=getattr(self, 'ep_name', None), year=self.year): return
-						url_path = self.url_path(folder_name, item[0])
+					url_path = self.url_path(folder_name, item[0])
 					size = self._get_size(url_path)
 					scrape_results_append((item[0], url_path, size))
 			elif self._folder_matches(item_name):
