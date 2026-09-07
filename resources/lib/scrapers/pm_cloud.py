@@ -15,17 +15,20 @@ class source:
 		# Track matched Premiumize folder paths so files from those folders can bypass per-file title checks.
 		self._matched_folder_paths = set()
 		self._matched_lock = Lock()
+		self._folder_names = {}
 
 	def results(self, info):
 		try:
 			if not enabled_debrids_check('pm'): return source_utils.internal_results(self.scrape_provider, self.sources)
 			self.folder_results, self.scrape_results = [], []
+			self._folder_names = {}
 			self.filter_title = filter_by_name(self.scrape_provider)
 			self.media_type, title = info.get('media_type'), info.get('title')
 			self.year, self.season, self.episode = int(info.get('year') or 0), info.get('season'), info.get('episode')
 			self.absolute_episode = info.get('absolute_episode')
 			self.title = title
 			self.aliases = source_utils.get_aliases_titles(info.get('aliases', []))
+			self.ep_name = info.get('ep_name') or info.get('episode_name') or ''
 			self.folder_query = source_utils.clean_title(normalize(title))
 			self.folder_queries = source_utils.folder_title_queries(title, self.aliases)
 			self._scrape_cloud()
@@ -75,6 +78,7 @@ class source:
 					if not any(x in normalized for x in self._year_query_list()): continue
 				if folder_path:
 					results_append(folder_path)
+					self._folder_names[folder_path] = folder_name
 					try:
 						with self._matched_lock:
 							self._matched_folder_paths.add(folder_path)
@@ -91,6 +95,7 @@ class source:
 			if not folder_path: return
 			folder_files = self.Premiumize.cloud_folder_contents(folder_path)
 			if not folder_files: return
+			folder_name = self._folder_names.get(folder_path, '')
 			scrape_results_append = self.scrape_results.append
 			for item in folder_files:
 				try:
@@ -98,7 +103,7 @@ class source:
 					file_path = item.get('path', '')
 					if not file_path.lower().endswith(tuple(self.extensions)): continue
 					normalized = normalize(file_path)
-					if self.media_type == 'episode' and not source_utils.cloud_episode_matches(self.season, self.episode, normalized, self.absolute_episode): continue
+					if self.media_type == 'episode' and not source_utils.cloud_folder_file_matches(self.season, self.episode, folder_name, normalized.rsplit('/', 1)[-1], self.absolute_episode, ep_name=self.ep_name, year=self.year): continue
 					# mark file as coming from a matched folder
 					scrape_results_append({'path': file_path, 'link': item.get('link'), 'size': item.get('size', 0), 'from_folder': True, 'folder_path': folder_path})
 				except Exception:
