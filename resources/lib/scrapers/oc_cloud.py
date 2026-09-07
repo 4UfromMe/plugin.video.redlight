@@ -15,19 +15,23 @@ class source:
 		# matched Offcloud requestIds (folders) recorded during prefiltering
 		self._matched_folder_ids = set()
 		self._matched_lock = Lock()
+		# folder id -> raw folder name (folder-context episode matching)
+		self._folder_names = {}
 
 	def results(self, info):
 		try:
 			if not enabled_debrids_check('oc'): return source_utils.internal_results(self.scrape_provider, self.sources)
 			self.folder_results, self.scrape_results = [], []
+			self._folder_names = {}
 			filter_title = filter_by_name(self.scrape_provider)
 			self.media_type, title = info.get('media_type'), info.get('title')
 			self.year, self.season, self.episode = int(info.get('year') or 0), info.get('season'), info.get('episode')
 			self.absolute_episode = info.get('absolute_episode')
 			self.title = title
+			self.aliases = source_utils.get_aliases_titles(info.get('aliases', []))
+			self.ep_name = info.get('ep_name') or info.get('episode_name') or ''
 			self.folder_query = source_utils.clean_title(normalize(title))
 			self.year_query_list = tuple(map(str, range(self.year - 1, self.year + 2)))
-			self.aliases = source_utils.get_aliases_titles(info.get('aliases', []))
 			self.title_queries = self._title_queries()
 			self._scrape_cloud()
 			if not self.scrape_results: return source_utils.internal_results(self.scrape_provider, self.sources)
@@ -38,7 +42,8 @@ class source:
 						# allow bypass when file was inside a matched folder
 						file_from_matched_folder = bool(item.get('from_folder')) or (item.get('folder_id') and item.get('folder_id') in self._matched_folder_ids)
 						if self.media_type == 'episode':
-							if not source_utils.cloud_episode_matches(self.season, self.episode, file_name, self.absolute_episode): continue
+							# folder-aware episode match: folder name + ep_name override + number evidence
+							if not source_utils.cloud_folder_file_matches(self.season, self.episode, self._folder_names.get(item.get('folder_id', ''), ''), file_name, self.absolute_episode, ep_name=self.ep_name, year=self.year): continue
 							if filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, self.aliases, self.year, 'pack', self.episode)): continue
 						elif filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, self.aliases, self.year, self.season, self.episode)): continue
 						display_name = clean_file_name(file_name).replace('html', ' ').replace('+', ' ').replace('-', ' ')
@@ -99,10 +104,13 @@ class source:
 			return True
 		return False
 
-	def _cloud_file_matches(self, normalized, folder_name='', folder_prefiltered=False):
+	def _cloud_file_matches(self, normalized, folder_name='', folder_prefiltered=False, folder_file_name=None):
 		if self.media_type == 'movie':
 			filename = source_utils.clean_title(normalized)
 			return any(x in filename for x in self.year_query_list) and self._title_match(filename, folder_name)
+		if folder_prefiltered and folder_file_name is not None:
+			# folder-context episode match: folder name + bare filename + ep_name override
+			return source_utils.cloud_folder_file_matches(self.season, self.episode, folder_name, folder_file_name, self.absolute_episode, ep_name=self.ep_name, year=self.year)
 		if not source_utils.cloud_episode_matches(self.season, self.episode, normalized, self.absolute_episode):
 			return False
 		if folder_prefiltered:
@@ -136,6 +144,7 @@ class source:
 					if request_id and request_id not in seen_ids:
 						seen_ids.add(request_id)
 						results_append((request_id, folder_name, raw_folder))
+						if raw_folder: self._folder_names[request_id] = raw_folder
 						try:
 							with self._matched_lock:
 								self._matched_folder_ids.add(request_id)
@@ -156,7 +165,7 @@ class source:
 
 	def _scrape_folders(self, folder_info):
 		try:
-			folder_id, folder_name, _raw_folder = folder_info
+			folder_id, _folder_name, raw_folder = folder_info
 			results_append = self.scrape_results.append
 			torrent_files = Offcloud.torrent_info(folder_id)
 			if not isinstance(torrent_files, list): return
@@ -164,7 +173,8 @@ class source:
 				try:
 					if not isinstance(item, str) or not item.lower().endswith(tuple(self.extensions)): continue
 					normalized = normalize(item.split('/')[-1])
-					if not self._cloud_file_matches(normalized, folder_name, folder_prefiltered=True): continue
+					# pass the raw folder name and bare filename for folder-context matching
+					if not self._cloud_file_matches(normalized, raw_folder, folder_prefiltered=True, folder_file_name=normalized): continue
 					results_append({'filename': normalized, 'url': item, 'from_folder': True, 'folder_id': folder_id})
 				except Exception:
 					continue
