@@ -11,7 +11,7 @@ class source:
 		self.scrape_provider = 'rd_cloud'
 		self.sources = []
 		self.extensions = source_utils.supported_video_extensions()
-		# matched folder ids recorded during prefiltering (_scrape_cloud only)
+		# matched folder ids recorded during prefiltering
 		self._matched_folder_ids = set()
 		self._matched_lock = Lock()
 
@@ -23,6 +23,7 @@ class source:
 			self.media_type, title, self.tmdb_id = info.get('media_type'), info.get('title'), info.get('tmdb_id')
 			self.year, self.season, self.episode = int(info.get('year')), info.get('season'), info.get('episode')
 			self.absolute_episode = info.get('absolute_episode')
+			self.title = title
 			self.aliases = source_utils.get_aliases_titles(info.get('aliases', []))
 			self.folder_query = source_utils.clean_title(normalize(title))
 			self.folder_queries = source_utils.folder_title_queries(title, self.aliases)
@@ -34,14 +35,13 @@ class source:
 				for item in self.scrape_results:
 					try:
 						file_name = self._get_filename(item['path'])
-						# bypass per-file title check when the file came from a folder that
-						# was matched BY NAME in _scrape_cloud (empty-name folders are not matched)
 						folder_id = item.get('folder_id', '')
-						file_from_matched_folder = bool(folder_id) and folder_id in self._matched_folder_ids
+						# allow bypass when file came from a folder matched by prefiltering
+						file_from_matched_folder = bool(item.get('from_folder')) or (folder_id and folder_id in self._matched_folder_ids)
 						if self.media_type == 'episode':
 							if not source_utils.cloud_episode_matches(self.season, self.episode, file_name, self.absolute_episode): continue
-							if filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, aliases, self.year, 'pack', self.episode)): continue
-						elif filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name, aliases, self.year, self.season, self.episode)): continue
+							if filter_title and not file_from_matched_folder and not source_utils.check_title(title, file_name, aliases, self.year, 'pack', self.episode): continue
+						elif filter_title and not file_from_matched_folder and not source_utils.check_title(title, file_name, aliases, self.year, self.season, self.episode): continue
 						display_name = clean_file_name(file_name).replace('html', ' ').replace('+', ' ').replace('-', ' ')
 						file_dl, size = item['url_link'], round(float(item['bytes'])/1073741824, 2)
 						video_quality, details = source_utils.get_file_info(name_info=source_utils.release_info_format(file_name))
@@ -70,17 +70,18 @@ class source:
 			for item in my_cloud_files:
 				normalized = normalize(item['filename'])
 				folder_name = source_utils.clean_title(normalized)
-				if not folder_name: results_append(item['id'])
+				if not folder_name:
+					# unparseable folder name: scrape it but do NOT mark as matched —
+					# its files stay under strict per-file check_title
+					results_append(item['id'])
 				elif not any(q and q in folder_name for q in self.folder_queries): continue
 				else:
 					if self.media_type == 'movie' and not any(x in normalized for x in year_query_list): continue
 					results_append(item['id'])
-					# folder matched by name — record as matched (thread-safe)
 					try:
 						with self._matched_lock:
 							self._matched_folder_ids.add(item['id'])
-					except:
-						pass
+					except: pass
 			if not self.folder_results: return self.sources
 			threads = []
 			threads_append = threads.append
@@ -99,11 +100,12 @@ class source:
 				try: i.update({'url_link': file_urls[c]})
 				except: pass
 			contents.sort(key=lambda k: k['path'])
+			with self._matched_lock: folder_is_matched = folder_info in self._matched_folder_ids
 			for item in contents:
 				normalized = normalize(item['path'])
 				if self.media_type == 'episode' and not source_utils.cloud_episode_matches(self.season, self.episode, normalized, self.absolute_episode): continue
 				if item['path'].replace('/', '').lower() not in [d['path'].replace('/', '').lower() for d in self.scrape_results]:
-					item.update({'folder_id': folder_info, 'cache_type': 'torrent'})
+					item.update({'folder_id': folder_info, 'cache_type': 'torrent', 'from_folder': folder_is_matched})
 					scrape_results_append(item)
 		except: pass
 
@@ -125,7 +127,7 @@ class source:
 		except: pass
 
 	def make_downloads_item(self, item):
-		return {'url_link': item['download'], 'bytes': item['filesize'], 'path': item['filename'], 'folder_id': item['id'], 'cache_type': 'download', 'direct_debrid_link': True}
+		return {'url_link': item['download'], 'bytes': item['filesize'], 'path': item['filename'], 'folder_id': item['id'], 'cache_type': 'download', 'direct_debrid_link': True, 'from_folder': False}
 
 	def _get_filename(self, name):
 		if name.startswith('/'): name = name.split('/')[-1]
