@@ -15,11 +15,14 @@ class source:
 		# matched folder ids recorded during prefiltering (evidence-based only)
 		self._matched_folder_ids = set()
 		self._matched_lock = Lock()
+		# folder id -> raw folder name (folder-context episode matching)
+		self._folder_names = {}
 
 	def results(self, info):
 		try:
 			if not enabled_debrids_check('ad'): return source_utils.internal_results(self.scrape_provider, self.sources)
 			self.folder_results, self.scrape_results = [], []
+			self._folder_names = {}
 			self.filter_title = filter_by_name(self.scrape_provider)
 			self.media_type, title = info.get('media_type'), info.get('title')
 			self.year, self.season, self.episode = int(info.get('year')), info.get('season'), info.get('episode')
@@ -27,6 +30,7 @@ class source:
 			self.tmdb_id = info.get('tmdb_id')
 			self.title = title
 			self.aliases = source_utils.get_aliases_titles(info.get('aliases', []))
+			self.ep_name = info.get('ep_name') or info.get('episode_name') or ''
 			self.folder_query = source_utils.clean_title(normalize(title))
 			self.folder_queries = source_utils.folder_title_queries(title, self.aliases)
 			self._scrape_history()
@@ -70,10 +74,10 @@ class source:
 
 	def _folder_matches(self, folder_name):
 		# Substring gate like RD/Fen — primary title or aliases (e.g. JP romaji).
-		if not folder_name: return True
 		if not self.filter_title: return True
+		if not folder_name: return False
 		cleaned = source_utils.clean_title(normalize(folder_name))
-		if not cleaned: return True
+		if not cleaned: return False
 		queries = getattr(self, 'folder_queries', None) or [self.folder_query]
 		return any(q and q in cleaned for q in queries)
 
@@ -83,7 +87,7 @@ class source:
 		elif self.media_type == 'episode' and not source_utils.cloud_episode_matches(self.season, self.episode, filename, self.absolute_episode):
 			return False
 		if not self.filter_title: return True
-		return source_utils.check_title(self.title, filename, self.aliases, self.year, self.season, self.episode)
+		return source_utils.check_title(self.title, filename, self.aliases, self.year, 'pack' if self.media_type == 'episode' else self.season, self.episode)
 
 	def _scrape_history(self):
 		try:
@@ -137,6 +141,7 @@ class source:
 				folder_id = item.get('id')
 				if folder_id:
 					self.folder_results.append({'id': folder_id, 'matched': folder_matched})
+					if folder_name: self._folder_names[folder_id] = folder_name
 					if folder_matched:
 						# folder matched by name — record as matched (thread-safe)
 						try:
@@ -165,13 +170,15 @@ class source:
 			if not folder_id: return
 			links = self.AllDebrid.cloud_file_links(folder_id)
 			links = [i for i in links if i.get('n', '').lower().endswith(tuple(self.extensions)) and i.get('l')]
+			folder_name = self._folder_names.get(folder_id, '')
 			for item in links:
 				# mark file as coming from a folder, with its actual evidence status
 				item['from_folder'] = folder_matched
 				item['folder_id'] = folder_id
-				if self.media_type == 'episode' and not source_utils.cloud_episode_matches(self.season, self.episode, item['n'], self.absolute_episode): continue
+				# folder-aware episode match: folder name + ep_name override + number evidence
+				if self.media_type == 'episode' and not source_utils.cloud_folder_file_matches(self.season, self.episode, folder_name, item['n'], self.absolute_episode, ep_name=self.ep_name, year=self.year): continue
 				# bypass file-level title/alias check only when the parent folder matched;
-				# episode-number matching remains enforced above
+				# episode matching remains enforced above via cloud_folder_file_matches
 				if self.filter_title and not (folder_matched or source_utils.check_title(self.title, item['n'], self.aliases, self.year, self.season, self.episode)): continue
 				self._append_scrape_result(item)
 		except: return
