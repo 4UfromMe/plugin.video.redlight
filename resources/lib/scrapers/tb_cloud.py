@@ -6,6 +6,7 @@ from modules import source_utils
 from modules.utils import clean_file_name, normalize
 from modules.settings import enabled_debrids_check, filter_by_name
 from caches.settings_cache import get_setting
+from threading import Lock
 # from modules.kodi_utils import logger
 
 class source:
@@ -15,6 +16,9 @@ class source:
 		self.extensions = source_utils.supported_video_extensions()
 		self._folder_fetch_count = 0
 		self._max_folder_fetches = 10
+		# matched folder ids recorded during prefiltering
+		self._matched_folder_ids = set()
+		self._matched_lock = Lock()
 
 	def results(self, info):
 		self.sources = []
@@ -48,12 +52,16 @@ class source:
 						if not file_name:
 							continue
 						file_name_latin = normalize(file_name) or file_name
+						# bypass per-file title check when the file came from a folder
+						# that passed folder-name prefiltering
+						folder_id = item.get('folder_id')
+						file_from_matched_folder = folder_id is not None and folder_id in self._matched_folder_ids
 						if self.media_type == 'episode':
 							if not source_utils.cloud_episode_matches(self.season, self.episode, file_name_latin, self.absolute_episode):
 								continue
-							if filter_title and not source_utils.check_title(title, file_name_latin, self.aliases, self.year, 'pack', self.episode):
+							if filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name_latin, self.aliases, self.year, 'pack', self.episode)):
 								continue
-						elif filter_title and not source_utils.check_title(title, file_name_latin, self.aliases, self.year, self.season, self.episode):
+						elif filter_title and not (file_from_matched_folder or source_utils.check_title(title, file_name_latin, self.aliases, self.year, self.season, self.episode)):
 							continue
 						display_name = clean_file_name(file_name).replace('html', ' ').replace('+', ' ').replace('-', ' ')
 						file_id = TorBoxAPI._torrent_file_id(item)
@@ -142,13 +150,12 @@ class source:
 			if self.year and not self._contains_year(raw_folder):
 				return False
 			return True
+		# episodes: require actual title/alias evidence — no season-pattern-only match
 		if self.folder_query and self.folder_query in folder_name:
 			return True
 		if any(q and q in folder_name for q in self.title_queries):
 			return True
-		if source_utils.seas_ep_filter_exact(self.season, self.episode, raw_folder):
-			return True
-		return self._title_match('', folder_name)
+		return False
 
 	def _match_cloud_file(self, normalized, folder_name='', raw_file='', raw_folder='', folder_prefiltered=False):
 		if self.media_type == 'episode':
@@ -194,6 +201,13 @@ class source:
 				folder_name = source_utils.clean_title(normalize(raw_folder))
 				if not self._prefilter_folder(folder_name, raw_folder):
 					continue
+				# folder passed prefiltering — record as matched (thread-safe)
+				if folder_id:
+					try:
+						with self._matched_lock:
+							self._matched_folder_ids.add(folder_id)
+					except:
+						pass
 				files = self._files_for_folder(folder_id, media_type, item)
 				if not files:
 					continue
