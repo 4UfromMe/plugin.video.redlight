@@ -40,7 +40,7 @@ class source:
 						# allow bypass when file was inside a matched folder
 						file_from_matched_folder = bool(item.get('from_folder')) or (item.get('folder_path') and item.get('folder_path') in self._matched_folder_paths)
 						if self.media_type == 'episode':
-							if not source_utils.cloud_episode_matches(self.season, self.episode, file_name, self.absolute_episode): continue
+							if not source_utils.cloud_folder_file_matches(self.season, self.episode, self._folder_names.get(item.get('folder_path', ''), ''), file_name.rsplit('/', 1)[-1], self.absolute_episode, ep_name=self.ep_name, year=self.year): continue
 							if self.filter_title and not file_from_matched_folder and not source_utils.check_title(title, file_name, self.aliases, self.year, 'pack', self.episode): continue
 						elif self.filter_title and not file_from_matched_folder and not source_utils.check_title(title, file_name, self.aliases, self.year, self.season, self.episode): continue
 						display_name = clean_file_name(file_name).replace('html', ' ').replace('+', ' ').replace('-', ' ')
